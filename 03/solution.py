@@ -41,15 +41,16 @@ def part_1(wire1, wire2):
     return min(manhattan(c, CENTRAL_PORT) for c in set(wire1) & set(wire2))
 
 
-def part_2():
-    pass
+def part_2(wire1, wire2):
+    wire1_steps = {p: i for i, p in enumerate(wire1)}
+    return min(i + wire1_steps[p] for i, p in enumerate(wire2) if p in wire1_steps)
 
 
 def main(puzzle_input_f):
     lines = [l.strip() for l in puzzle_input_f.readlines() if l]
-    wire1, wire2 = [path_coords(l.split(",")) for l in lines]
+    wire1, wire2 = [list(path_coords(l.split(","))) for l in lines]
     print("Part 1: ", part_1(wire1, wire2))
-    print("Part 2: ", part_2())
+    print("Part 2: ", part_2(wire1, wire2))
 
 
 if __name__ == "__main__":
