@@ -1,9 +1,9 @@
 """
-Note: Mostly copied from day 05 solution.
+Note: Intcode computer (`run` function) mostly copied from day 05 solution
 """
+import itertools
+from collections import deque
 from enum import IntEnum
-from functools import reduce
-from itertools import permutations
 from typing import List, NamedTuple
 
 
@@ -36,7 +36,7 @@ def parse_instruction(code) -> Instruction:
 
 
 # TODO: Clean this up! I'm not proud of this code, it's *certainly* not clean or elegant!
-def run(prg, input_vals):
+def run(prg, inqueue):
     ip = 0
     while True:
         inst = parse_instruction(prg[ip])
@@ -44,7 +44,7 @@ def run(prg, input_vals):
         if inst.op == 99:
             return prg
         elif inst.op == 3:
-            prg[prg[ip + 1]] = next(input_vals)  # 'read' from input
+            prg[prg[ip + 1]] = inqueue.popleft()  # 'read' from input
             ip += 2
         elif inst.op == 4:
             yield prg[prg[ip + 1]]  # 'output' a value
@@ -72,26 +72,53 @@ def run(prg, input_vals):
     return prg
 
 
-def run_all(prg, phases):
-    def run_amplifier(input_val, phase):
-        return list(run(prg[:], iter((phase, input_val))))[-1]
+class Amplifier:
+    def __init__(self, name, prg, phase):
+        self.inqueue = deque([phase])
+        self.process = run(prg[:], self.inqueue)
 
-    return reduce(run_amplifier, phases, 0)
+    def __str__(self):
+        return f"Amplifier {self.name}"
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self.process)
+
+
+def pairwise_circle(iterable):
+    "s -> (s0,s1), (s1,s2), (s2, s3), ... (s<last>,s0)"
+    a, b = itertools.tee(itertools.cycle(iterable))
+    next(b)
+    return zip(a, b)
+
+
+def run_amps(prg, phases, init_val=0):
+    amps = [Amplifier(i, prg, p) for i, p in enumerate(phases)]
+    amps[0].inqueue.append(init_val)
+
+    for amp, next_amp in pairwise_circle(amps):
+        try:
+            val = next(amp)
+        except StopIteration:
+            return val
+        next_amp.inqueue.append(val)
 
 
 def part_1(prg):
-    return max(run_all(prg, phases) for phases in permutations(range(5)))
+    return max(run_amps(prg, phases) for phases in itertools.permutations(range(5)))
 
 
-def part_2():
-    pass
+def part_2(prg):
+    return max(run_amps(prg, phases) for phases in itertools.permutations(range(5, 10)))
 
 
 def main(puzzle_input_f):
     line = puzzle_input_f.read().strip()
     prg = [int(x) for x in line.split(",")]
     print("Part 1: ", part_1(prg[:]))  # copy to avoid mutation
-    print("Part 2: ", part_2())
+    print("Part 2: ", part_2(prg[:]))
 
 
 if __name__ == "__main__":
