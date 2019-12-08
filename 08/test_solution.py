@@ -1,6 +1,6 @@
 import pytest
 
-from solution import parse_layers, build_image
+from solution import parse_layers, build_image_matrix
 
 
 @pytest.mark.parametrize(
@@ -29,11 +29,11 @@ def test_parse_layers(image_data, width, height, expected_layers):
     assert list(parse_layers(image_data, width, height)) == expected_layers
 
 
-def test_build_image():
+def test_build_image_matrix():
     layers = [
         ("0", "2", "2", "2"),
         ("1", "1", "2", "2"),
         ("2", "2", "1", "2"),
         ("0", "0", "0", "0"),
     ]
-    assert build_image(layers, 2) == [["0", "1"], ["1", "0"]]
+    assert build_image_matrix(layers, 2) == [["0", "1"], ["1", "0"]]
