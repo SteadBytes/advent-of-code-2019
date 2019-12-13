@@ -1,9 +1,9 @@
 """
 Intcode computer copied from day 09
 """
-from collections import defaultdict, deque
+from collections import defaultdict
 from enum import IntEnum
-from typing import DefaultDict, List, NamedTuple
+from typing import Callable, DefaultDict, List, NamedTuple
 
 Memory = DefaultDict[int, int]
 
@@ -67,7 +67,8 @@ def prg_to_memory(prg: List[int]) -> Memory:
     return defaultdict(int, enumerate(prg))
 
 
-def run(mem: Memory, inqueue: deque):
+# Modified to call a function to retrieve input (joystick positions in this case)
+def run(mem: Memory, get_input: Callable[[], int]):
     ip = rel_base = 0
 
     def read(inst: Instruction, param: int):
@@ -90,7 +91,7 @@ def run(mem: Memory, inqueue: deque):
             write(inst, 3, read(inst, 1) * read(inst, 2))
             ip += 4
         elif inst.op == OpCodes.INPUT:
-            write(inst, 1, inqueue.popleft())
+            write(inst, 1, get_input())
             ip += 2
         elif inst.op == OpCodes.OUTPUT:
             yield read(inst, 1)
