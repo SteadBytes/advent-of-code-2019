@@ -1,4 +1,4 @@
-from itertools import chain, cycle, islice, tee
+from itertools import chain, cycle, islice, tee, repeat
 from typing import Iterable
 
 
@@ -39,14 +39,24 @@ def part_1(signal: str):
     return nth(fft(signal), 99)[:8]
 
 
-def part_2():
-    pass
+# TODO: comment/explain this
+# partial sums of offset->end section w/examples?
+def part_2(signal: str):
+    offset = int(signal[:7])
+    digits = [int(c) for c in signal]
+    part = (digits * 10000)[offset:]
+
+    # TODO: extract this out and remove mutation of `part` list
+    for _ in range(100):
+        for i in range(len(part) - 1, 0, -1):
+            part[i - 1] = (part[i - 1] + part[i]) % 10
+    return "".join(str(x) for x in part[:8])
 
 
 def main(puzzle_input_f):
     signal = puzzle_input_f.read().strip()
     print("Part 1: ", part_1(signal))
-    print("Part 2: ", part_2())
+    print("Part 2: ", part_2(signal))
 
 
 if __name__ == "__main__":
