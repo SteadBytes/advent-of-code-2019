@@ -1,38 +1,113 @@
-from intcode import group_outputs, prg_to_memory, run
+import asyncio
+from collections import defaultdict, deque
+from enum import IntEnum
+from typing import Deque, Iterable, NamedTuple
+
+import intcode
 
 
-def part_1(prg: str):
-    mem = prg_to_memory(prg)
-    inqueue = []
-    pc = run(mem, inqueue)
-    tiles = {}
-    for x, y, tile_id in group_outputs(pc, 3):
-        tiles[(x, y)] = tile_id
-    return sum(1 for v in tiles.values() if v == 2)
+class Coord(NamedTuple):
+    x: int
+    y: int
+
+    def __add__(self, other):
+        assert len(other) == len(self)
+        return self.__class__(*(x + y for x, y in zip(self, other)))
+
+    def __sub__(self, other):
+        assert len(other) == len(self)
+        return self.__class__(*(x - y for x, y in zip(self, other)))
+
+
+class TileId(IntEnum):
+    EMPTY = 0
+    WALL = 1
+    BLOCK = 2
+    PADDLE = 3
+    BALL = 4
+
+
+class JoystickPosition(IntEnum):
+    LEFT = -1
+    NEUTRAL = 0
+    RIGHT = 1
+
+
+OutputBuffer = Deque[int]
+
+
+def drain_buffer(buffer: OutputBuffer) -> Iterable[int]:
+    while buffer:
+        yield buffer.popleft()
+
+
+def part_1(prg: intcode.Program):
+    class TileMapper:
+        def __init__(self):
+            self.tiles = defaultdict(lambda: TileId.EMPTY)
+            self.buffer = deque([])
+
+        async def __call__(self, value):
+            self.buffer.append(value)
+            if len(self.buffer) == 3:
+                self.process(*drain_buffer(self.buffer))
+                assert not self.buffer
+
+        def process(self, x: int, y: int, tile_id: int):
+            self.tiles[Coord(x, y)] = tile_id
+
+    mem = intcode.prg_to_memory(prg)
+    s = TileMapper()
+    asyncio.run(intcode.execute(mem, intcode.no_input, s))
+    return sum(1 for v in s.tiles.values() if v == 2)
 
 
 # TODO: Simulate the game output with curses?
-def part_2(prg: str):
-    mem = prg_to_memory(prg)
+def part_2(prg: intcode.Program):
+    class Game:
+        def __init__(self):
+            self.tiles = defaultdict(lambda: TileId.EMPTY)
+            self.score = 0
+            self.paddle_pos: Coord = None
+            self.ball_pos: Coord = None
+            self.buffer: OutputBuffer = deque([])
+
+        async def handle_output(self, value: int):
+            self.buffer.append(value)
+            if len(self.buffer) == 3:
+                self.process(*drain_buffer(self.buffer))
+                assert not self.buffer
+
+        async def handle_input(self) -> JoystickPosition:
+            if self.ball_pos is None or self.paddle_pos is None:
+                return JoystickPosition.NEUTRAL
+
+            if self.ball_pos.x == self.paddle_pos.x:
+                return JoystickPosition.NEUTRAL
+
+            return (
+                JoystickPosition.LEFT
+                if self.ball_pos.x < self.paddle_pos.x
+                else JoystickPosition.RIGHT
+            )
+
+        def process(self, x: int, y: int, tile_id_or_score: int):
+            if x == -1 and y == 0:
+                self.score = tile_id_or_score
+                return
+            c = Coord(x, y)
+            if tile_id_or_score == TileId.PADDLE:
+                self.paddle_pos = c
+            elif tile_id_or_score == TileId.BALL:
+                self.ball_pos = c
+            self.tiles[c] = tile_id_or_score
+
+    mem = intcode.prg_to_memory(prg)
     mem[0] = 2  # play for free!
-    ball_x = paddle_x = 0
 
-    def joystick_position():
-        if ball_x == paddle_x:
-            return 0
-        else:
-            return -1 if ball_x < paddle_x else 1
-
-    pc = run(mem, joystick_position)
-    score = 0
-    for x, y, tile_id in group_outputs(pc, 3):
-        if x == -1 and y == 0:
-            score = tile_id
-        elif tile_id == 3:
-            paddle_x = x
-        elif tile_id == 4:
-            ball_x = x
-    return score
+    g = Game()
+    asyncio.run(intcode.execute(mem, g.handle_input, g.handle_output))
+    return g.score
 
 
 def main(puzzle_input_f):
