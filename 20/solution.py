@@ -43,24 +43,35 @@ MOVE_DIRECTIONS = {
     Direction.WEST: Coord(-1, 0),
 }
 
+START_LABEL, END_LABEL = "AA", "ZZ"
+
 Grid = List[str]
-Map = DefaultDict[Coord, Tile]
-Portals = DefaultDict[str, List[Portal]]
-PortalMap = Dict[Coord, Coord]
+TileMap = DefaultDict[Coord, Tile]
+PortalMap = Dict[Coord, Tuple[Portal, Portal]]
+
+
+class Maze(NamedTuple):
+    tiles: TileMap
+    portals: PortalMap
+    start: Coord
+    end: Coord
 
 
 def neighbours(loc: Coord) -> Iterable[Coord]:
     return (loc + diff for diff in MOVE_DIRECTIONS.values())
 
 
-def parse_grid(grid: Grid) -> Tuple[Map, Portals]:
-    m: Map = defaultdict(lambda: Tile.EMPTY)
-    portals: Portals = defaultdict(list)
+def parse_grid(grid: Grid) -> Maze:
+    m: TileMap = defaultdict(lambda: Tile.EMPTY)
+    portals: DefaultDict[str, List[Portal]] = defaultdict(list)
     for y, row in enumerate(grid):
         for x, val in enumerate(row):
-            # TODO: Tidy this up
             loc = Coord(x, y)
-            if val.isupper():  # Portal
+            portal_or_entrance = val.isupper()
+            if not portal_or_entrance:
+                tile = Tile(val)
+                m[loc] = tile
+            else:
                 # Interior LHS inner label or exterior RHS inner label
                 if loc.x > 0 and row[loc.x - 1] == ".":
                     p = Portal(
@@ -85,112 +96,98 @@ def parse_grid(grid: Grid) -> Tuple[Map, Portals]:
                     # Ignore outer labels as they're processed as part of inner label
                     continue
                 portals[p.label].append(p)
-            else:
-                tile = Tile(val)
-                m[loc] = tile
-    return m, portals
+
+    # Start/end locations aren't actually portals, however parsing them from the
+    # requries grid requires the same logic as portals
+    # Remove and treat separately from now on
+    assert len(portals[START_LABEL]) == 1
+    assert len(portals[END_LABEL]) == 1
+    start, end = (portals.pop(l)[0].location for l in (START_LABEL, END_LABEL))
+
+    # Build PortalMap from intermediate portals dict
+    pm = {}
+    for label, (p1, p2) in portals.items():
+        pm[p1.location] = (p1, p2)
+        pm[p2.location] = (p2, p1)
+    return Maze(m, pm, start, end)
 
 
-def find_shortest_path_length(src: Coord, dest: Coord, m: Map, pm: PortalMap) -> int:
+def find_shortest_path_length(m: Maze) -> int:
     seen = set()
-    q = [(0, src)]
+    q = [(0, m.start)]
     while q:
         dist, loc = heapq.heappop(q)
         seen.add(loc)
-        if loc == dest:
+        if loc == m.end:
             return dist
         for next_loc in neighbours(loc):
-            if next_loc in seen or m[next_loc] != Tile.OPEN:
+            if next_loc in seen or m.tiles[next_loc] != Tile.OPEN:
                 continue
+            # Normal step
             heapq.heappush(q, (dist + 1, next_loc))
-        if loc in pm and pm[loc] not in seen:
-            heapq.heappush(q, (dist + 1, pm[loc]))
+        if loc in m.portals:
+            src, dest = m.portals[loc]
+            if dest.location not in seen:
+                # Teleport!
+                heapq.heappush(q, (dist + 1, dest.location))
 
-    raise RuntimeError(f"No path found from {src} -> {dest}")
+    raise RuntimeError(f"No path found from {m.start} -> {m.end}")
 
 
 def part_1(grid: Grid) -> int:
-    m, portals = parse_grid(grid)
-    assert len(portals["AA"]) == 1
-    assert len(portals["ZZ"]) == 1
-    src, dest = portals.pop("AA")[0].location, portals.pop("ZZ")[0].location
-    pm = {}
-    for label, (p1, p2) in portals.items():
-        pm[p1.location] = p2.location
-        pm[p2.location] = p1.location
-
-    return find_shortest_path_length(src, dest, m, pm)
+    maze = parse_grid(grid)
+    return find_shortest_path_length(maze)
 
 
 def is_disabled(p: Portal, depth: int) -> bool:
-    if depth == 0:
-        return p.outer and p.label not in ("AA", "ZZ")
-    else:
-        return p.outer and p.label in ("AA", "ZZ")
+    return p.outer if depth == 0 else False
 
 
-def find_shortest_path_length_recursive_levels(
-    src: Portal, dest: Portal, m: Map, pm: Dict[Coord, Portal], ps: Portals
-) -> int:
+def find_shortest_path_length_recursive_levels(m: Maze) -> int:
     """BFS again with the addition of tracking the *depth* at which a location has
     been visited.
 
     Portal behaviour:
     - Disabled portals treated as walls
     - Depth 0
-        - All *outer* portals disabled *except* AA and ZZ
+        - All *outer* portals disabled
         - Inner portals increment depth (recurse into smaller maze)
     - Depth > 0
-        - AA and ZZ disabled
         - Outer portals decrement depth ('pop the stack' into the previous recursion)
         - Inner portals increment depth (recurse into smaller maze)
     - Terminate when depth 0 and location == ZZ
     """
     seen = set()
-    q = [(0, 0, src.location)]
+    q = [(0, 0, m.start)]
     while q:
         dist, depth, loc = heapq.heappop(q)
         seen.add((depth, loc))
-        if depth == 0 and loc == dest.location:
+        if depth == 0 and loc == m.end:
             return dist
 
-        if loc in pm:
-            # TODO: Refactor portal data structures to avoid this double lookup
-            dest_portal = pm[loc]
-            src_portal = pm[dest_portal.location]
-            if not is_disabled(src_portal, depth):
-                d = depth - 1 if dest_portal.outer else depth + 1
-                if (d, dest_portal.location) not in seen:
-                    heapq.heappush(q, (dist + 1, d, dest_portal.location))
-
         for next_loc in neighbours(loc):
-            if (depth, next_loc) in seen or m[next_loc] != Tile.OPEN:
+            if (depth, next_loc) in seen or m.tiles[next_loc] != Tile.OPEN:
                 continue
-            if next_loc in pm:
-                # TODO: See above
-                dest_portal = pm[next_loc]
-                src_portal = pm[dest_portal.location]
-                if is_disabled(src_portal, depth):
-                    continue
+            # Normal step
             heapq.heappush(q, (dist + 1, depth, next_loc))
+
+        if loc in m.portals:
+            src, dest = m.portals[loc]
+            if is_disabled(src, depth):
+                continue
+            # Inner portals recurse deeper
+            # Outer portals 'pop' back previous level
+            d = depth - 1 if dest.outer else depth + 1
+            if (d, dest.location) not in seen:
+                # Teleport!
+                heapq.heappush(q, (dist + 1, d, dest.location))
+
     raise RuntimeError(f"No path found from {src} -> {dest}")
 
 
 def part_2(grid: Grid) -> int:
-    # TODO: Refactor this repeated work from part 1
-    m, portals = parse_grid(grid)
-    assert len(portals["AA"]) == 1
-    assert len(portals["ZZ"]) == 1
-    src_portal, dest_portal = portals.pop("AA")[0], portals.pop("ZZ")[0]
-    assert src_portal.outer is True
-    assert dest_portal.outer is True
-    pm = {}
-    for label, (p1, p2) in portals.items():
-        pm[p1.location] = p2
-        pm[p2.location] = p1
-    return find_shortest_path_length_recursive_levels(
-        src_portal, dest_portal, m, pm, portals
-    )
+    m = parse_grid(grid)
+    return find_shortest_path_length_recursive_levels(m)
 
 
 def main(puzzle_input_f):
