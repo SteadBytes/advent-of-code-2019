@@ -28,22 +28,48 @@ async def droid(mem: Memory, script: List[str], out=stdout):
 
 
 # TODO: Document this from notes
-def part_1(prg: Program):
+def part_1(prg: Program) -> int:
+    """
+    Jump distance = 4 tiles
+    """
     mem = prg_to_memory(prg)
     c = output_collector()
     asyncio.run(droid(mem, ["NOT A T", "NOT C J", "AND D J", "OR T J", "WALK"], out=c))
     return c.output[-1]
 
 
-def part_2():
-    pass
+# TODO: Document this from notes
+def part_2(prg: Program):
+    """
+    Jump distance = 4 tiles
+    """
+    mem = prg_to_memory(prg)
+    c = output_collector()
+    asyncio.run(
+        droid(
+            mem,
+            [
+                "NOT C J",
+                "AND D J",
+                "AND H J",
+                "NOT B T",
+                "AND D T",
+                "OR T J",
+                "NOT A T",
+                "OR T J",
+                "RUN",
+            ],
+            out=c,
+        )
+    )
+    return c.output[-1]
 
 
 def main(puzzle_input_f):
     line = puzzle_input_f.read().strip()
     prg = [int(x) for x in line.split(",")]
     print("Part 1: ", part_1(prg[:]))
-    print("Part 2: ", part_2())
+    print("Part 2: ", part_2(prg))
 
 
 if __name__ == "__main__":
