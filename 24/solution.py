@@ -1,9 +1,12 @@
-from itertools import chain
-from typing import Iterable, Set
+from enum import IntEnum
+from functools import partial
+from itertools import chain, islice, product
+from operator import ne
+from typing import Iterable, Set, Tuple
 
 SIZE = 5  # Fixed size given in puzzle specification
 AREA = SIZE * SIZE  # Assuming square
-
+CENTER = (SIZE // 2, SIZE // 2)
 EMPTY_TILE = "."
 INFESTED_TILE = "#"
 
@@ -175,8 +178,89 @@ def part_1(g: Grid) -> int:
     raise RuntimeError("No repeated grid layout found")
 
 
-def part_2():
-    pass
+# TODO: Does this need IntEnum?
+class GridRelation(IntEnum):
+    """
+    Values correspond to index offsets used in `simulate_recursive_grids_xy` to
+    access the corresponding grid given the current grid index.
+    """
+
+    OUTER = 0
+    CURRENT = 1
+    INNER = 2
+
+
+def adjacent_coords(x: int, y: int) -> Iterable[Tuple[GridRelation, int, int]]:
+    neighbours = ((x + dx, y + dy) for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)))
+    for x_, y_ in neighbours:
+        if x_ < 0:
+            # Outer left edge
+            yield (GridRelation.OUTER, 1, 2)
+        elif x_ >= SIZE:
+            # Outer right edge
+            yield (GridRelation.OUTER, 3, 2)
+        elif y_ < 0:
+            # Outer top edge
+            yield (GridRelation.OUTER, 2, 1)
+        elif y_ >= SIZE:
+            # Outer bottom edge
+            yield (GridRelation.OUTER, 2, 3)
+        elif (x_, y_) == CENTER:
+            c_x, c_y = CENTER
+            if x == c_x and y == c_y - 1:
+                # Top center adjacent
+                yield from ((GridRelation.INNER, ix, 0) for ix in range(SIZE))
+            elif x == c_x and y == c_y + 1:
+                # Bottom center adjacent
+                yield from ((GridRelation.INNER, ix, 4) for ix in range(SIZE))
+            elif x == c_x - 1 and y == c_y:
+                # Left center adjacent
+                yield from ((GridRelation.INNER, 0, iy) for iy in range(SIZE))
+            elif x == c_x + 1 and y == c_y:
+                # Right center adjacent
+                yield from ((GridRelation.INNER, 4, iy) for iy in range(SIZE))
+        else:
+            yield (GridRelation.CURRENT, x_, y_)
+
+
+not_center = partial(ne, CENTER)
+
+
+# TODO: Pure bit manipulation version (same as `simulate`)
+def simulate_recursive_grids_xy(g: Grid):
+    levels = [0, 0, g, 0, 0]
+    while True:
+        next_levels = [0, 0]
+        # Iterate over previously seen levels + 1 new above & 1 new below
+        for i, grid in enumerate(levels[1:-1]):
+            next_grid = 0
+            # Centre leads into next level
+            for x, y in filter(not_center, product(range(SIZE), range(SIZE))):
+                adj_bugs = sum(
+                    get_coord_bit(levels[i + g_type], x_, y_)
+                    for g_type, x_, y_ in adjacent_coords(x, y)
+                )
+                current_bug = get_coord_bit(grid, x, y)
+                # Any tile (infested or not) w/exactly 1 adjacent bug will be infested
+                # in the next grid. Else, empty tiles woll be infested if they have
+                # exactly 2 adjacent bugs
+                should_infest = adj_bugs == 1 or (not current_bug and adj_bugs == 2)
+                if should_infest:
+                    # Set current tile as infested and 'fill in' empty tiles in
+                    # between this and the previously set tile
+                    next_grid |= 1 << coord_bit(x, y)
+            next_levels.append(next_grid)
+        next_levels += [0, 0]
+        yield next_levels
+        levels = next_levels
+
+
+def part_2(g: Grid) -> int:
+    """
+    See part-2-notes.pdf for (not quite) beautiful hand written notes.
+    """
+    sim = simulate_recursive_grids_xy(g)
+    return sum(bin(g).count("1") for g in next(islice(sim, 199, None)))
 
 
 def parse_input(lines: Iterable[str]) -> Grid:
@@ -205,7 +289,7 @@ def main(puzzle_input_f):
     lines = [l.strip() for l in puzzle_input_f.readlines() if l]
     grid = parse_input(lines)
     print("Part 1: ", part_1(grid))
-    print("Part 2: ", part_2())
+    print("Part 2: ", part_2(grid))
 
 
 if __name__ == "__main__":
