@@ -1,11 +1,15 @@
 from collections import defaultdict
-from enum import IntEnum
+from enum import Enum, IntEnum
 from typing import Callable, Coroutine, DefaultDict, List, NamedTuple
 
 # TODO: Re-structure codebase to allow this to be imported properly instead of symlinked
 
 Program = List[int]
 Memory = DefaultDict[int, int]
+
+
+class DebugCommands(Enum):
+    IMMEDIATE_EXIT = 0
 
 
 class Mode(IntEnum):
@@ -54,20 +58,49 @@ async def no_input():
     raise RuntimeError("Program was not expected to require input")
 
 
+class stdin:
+    def __init__(self):
+        self._input_iter = self._input()
+
+    async def __call__(self):
+        return next(self._input_iter)
+
+    def _input(self):
+        while True:
+            s = input()
+            yield from map(ord, s + "\n")
+
+
+async def stdout(val: int):
+    try:
+        s = chr(val)
+    except ValueError:
+        s = val
+    print(s, end="")
+
+
 async def execute(
     mem: Memory,
     read_in: Callable[[], Coroutine[None, None, int]],
     write_out: Callable[[int], Coroutine],
+    ip: int = 0,
+    rel_base: int = 0,
 ):
     """Intcode 'VM' entrypoint. Executes a program 'loaded' into memory (`mem`).
 
     Args:
-        mem : Memory containing an Intcode program
+        mem : Memory containing an Intcode program. Note: Can be combined with
+              `ip` and `rel_base` args to start the VM from a 'snapshot'. These
+              values are returned from the VM when `DebugCommands.IMMEDIAT_EXIT`
+              is received as input.
         read_in: Callable providing a coro which returns the next instruction
             (an `int`) to the running machine when awaited
         write_out: Callable to receive program outputs (more `int`s)
+        ip: Instruction pointer, provide specific value when re-starting the VM
+            from a known state (default 0)
+        rel_base: Relative base provide specific value when re-starting the VM
+            from a known state (default 0)
     """
-    ip = rel_base = 0
 
     def read(inst: Instruction, param: int):
         assert param >= 1
@@ -101,6 +134,9 @@ async def execute(
             ip += 4
         elif inst.op == OpCodes.INPUT:
             val = await read_in()
+            if val is DebugCommands.IMMEDIATE_EXIT:
+                # Return 'snapshot' of VM state for debugging
+                return mem, ip, rel_base
             write(inst, 1, val)
             ip += 2
         elif inst.op == OpCodes.OUTPUT:
