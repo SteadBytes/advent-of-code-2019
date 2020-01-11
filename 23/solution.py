@@ -1,8 +1,10 @@
-import asyncio
 from collections import deque
-from typing import NamedTuple
+from typing import List, NamedTuple, Optional, Deque
 
-from intcode import Memory, Program, execute, prg_to_memory
+from intcode import IntCodeVM, Program, Status
+
+NETWORK_SIZE = 50
+NAT_ADDRESS = 255
 
 
 class Packet(NamedTuple):
@@ -11,89 +13,115 @@ class Packet(NamedTuple):
     y: int
 
 
-# TODO: Document and refactor this
-# TODO: Can 'inqueue_failed_attempts' counting be replaced by Packet tuples?
-async def run_pcs(mem: Memory, on_finish, n: int = 50):
-    lock = asyncio.Lock()
-    conds = tuple(asyncio.Condition(lock) for _ in range(n))
-    inqueues = tuple(deque((i,)) for i in range(n))
-    inqueue_failed_attempts = {}
+# TODO: Document!
 
-    async def go(mem, i):
-        queue, cond = inqueues[i], conds[i]
 
-        async def input():
-            print(i, "input")
-            async with lock:
-                while True:
-                    if queue:
-                        inqueue_failed_attempts[i] = 0
-                        v = queue.popleft()
-                        print("pop", i, v)
-                        return v
-                    inqueue_failed_attempts[i] += 1
-                    if inqueue_failed_attempts[i] <= 1:
-                        print(i, -1)
-                        return -1
-                    elif not queue:
-                        print(i, "waiting")
-                        await cond.wait()
+class NetworkedIntcodeVM:
+    def __init__(self, prg: Program, address: int, target_address: int, network: list):
+        self.packet_queue: Deque[Packet] = deque([])
+        self.vm = IntCodeVM(prg)
+        self.address = address
+        self.vm.input_val = address
+        self.target_address = target_address
+        self.network = network
+        self.vm.execute_until_complete_or_input()
+        self.vm.input_val = -1
+        self.status = Status.IDLE
 
-        p_buff = deque([])
+    def execute_until_io(self) -> Optional[Packet]:
+        self.status = Status.RUNNING
+        if not self.packet_queue:
+            self.vm.input_val = -1
+        else:
+            self.vm.input_val = self.packet_queue[0].x
+        dest_address = self.vm.execute_until_complete_or_io()
+        assert self.vm.status != Status.COMPLETE
+        if self.vm.status != Status.HALTED_ON_INPUT:
+            self.status = Status.RUNNING
+            x = self.vm.execute_until_complete_or_io()
+            y = self.vm.execute_until_complete_or_io()
+            assert dest_address and x and y
+            packet = Packet(dest_address, x, y)
+            if packet.destination == self.target_address:
+                return packet
+            self.network[dest_address].packet_queue.append(packet)
+        else:
+            if self.packet_queue:
+                self.vm.input_val = self.packet_queue.popleft().y
+                self.vm.execute_until_complete_or_input()
+            else:
+                self.status = Status.IDLE
+        return None
 
-        async def output(val):
-            print(i, "output")
-            async with lock:
-                print(i, "buff", val)
-                p_buff.append(val)
-                inqueue_failed_attempts[i] = 0
-            if len(p_buff) == 3:
-                p = Packet(*p_buff)
-                p_buff.clear()
-                if p.destination == 255:
-                    await on_finish(p)
-                else:
-                    async with lock:
-                        print(p)
-                        inqueues[p.destination].append(p.x)
-                        inqueues[p.destination].append(p.y)
-                        conds[p.destination].notify()
 
-        asyncio.create_task(execute(mem, input, output))
+Network = List[NetworkedIntcodeVM]
 
-    return [asyncio.create_task(go(mem.copy(), i)) for i in range(n)]
+
+def init_network(prg: Program, n: int, nat_address: int) -> Network:
+    network: List[NetworkedIntcodeVM] = []
+    for address in range(n):
+        network.append(NetworkedIntcodeVM(prg, address, nat_address, network))
+    return network
 
 
 def part_1(prg: Program):
-    mem = prg_to_memory(prg)
-
-    async def main():
-        result = asyncio.Queue()
-
-        async def handle_dest_255(p: Packet):
-            assert p.destination == 255
-            await result.put(p.y)
-
-        tasks = await run_pcs(mem, handle_dest_255)
-
-        try:
-            return await result.get()
-        finally:
-            for t in tasks:
-                t.cancel()
-
-    return asyncio.run(main())
+    network = init_network(prg, NETWORK_SIZE, NAT_ADDRESS)
+    while True:
+        for pc in network:
+            packet = pc.execute_until_io()
+            if packet is not None and packet.destination == NAT_ADDRESS:
+                return packet.y
 
 
-def part_2():
-    pass
+class NAT:
+    def __init__(self, network: Network):
+        self.network = network
+
+        self.current_packet: Optional[Packet] = None
+        self.prev_packet: Optional[Packet] = None
+
+    def recv(self, packet: Packet):
+        self.current_packet = packet
+
+    def poll(self) -> Optional[Packet]:
+        if self.current_packet is not None and self._is_network_idle():
+            if self._repeated_y():
+                return self.current_packet
+            else:
+                self.prev_packet = None
+            self.prev_packet = self.current_packet
+            self.network[0].packet_queue.append((self.current_packet))
+            self.current_packet = None
+        return None
+
+    def _repeated_y(self) -> bool:
+        if self.current_packet is None or self.prev_packet is None:
+            return False
+        return self.current_packet.y == self.prev_packet.y
+
+    def _is_network_idle(self) -> bool:
+        return all(pc.status == Status.IDLE for pc in self.network)
+
+
+def part_2(prg: Program):
+    network = init_network(prg, NETWORK_SIZE, NAT_ADDRESS)
+    nat = NAT(network)
+
+    while True:
+        for pc in network:
+            packet = pc.execute_until_io()
+            if packet is not None and packet.destination == NAT_ADDRESS:
+                nat.recv(packet)
+        p = nat.poll()
+        if p is not None:
+            return p.y
 
 
 def main(puzzle_input_f):
     line = puzzle_input_f.read().strip()
     prg = [int(x) for x in line.split(",")]
     print("Part 1: ", part_1(prg[:]))
-    print("Part 2: ", part_2())
+    print("Part 2: ", part_2(prg))
 
 
 if __name__ == "__main__":
